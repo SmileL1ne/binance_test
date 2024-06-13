@@ -46,49 +46,51 @@ type Handler struct {
 }
 
 func (h *Handler) Run(ctx context.Context, symbols []string) {
-	var retryCount int
-	for _, s := range symbols {
-		select {
-		case <-ctx.Done():
-			log.Info().Msg("worker stopping by request")
-			return
-		default:
+	for {
+		var retryCount int
+		for _, s := range symbols {
+			select {
+			case <-ctx.Done():
+				log.Info().Msg("worker stopping by request")
+				return
+			default:
+			}
+
+			if retryCount > h.maxTries {
+				log.Error().Msgf("exceeded max retry count")
+				return
+			}
+
+			h.addToCount()
+
+			body, err := fetch(s)
+			if err != nil {
+				retryCount++
+				continue
+			}
+			retryCount = 0
+
+			var priceResp PriceResponse
+			if err := json.Unmarshal(body, &priceResp); err != nil {
+				log.Error().Msgf("error unmarshaling response: %v", err)
+				continue
+			}
+
+			totalMx.Lock()
+			totalReqCount++
+			totalMx.Unlock()
+
+			msgFormat := "%s price:%s"
+			cacheMx.Lock()
+			_, ok := cache[priceResp.Symbol]
+			if ok {
+				msgFormat += " changed"
+			}
+			cache[priceResp.Symbol] = priceResp.Price
+			cacheMx.Unlock()
+
+			log.Info().Msgf(msgFormat, priceResp.Symbol, priceResp.Price)
 		}
-
-		if retryCount > h.maxTries {
-			log.Error().Msgf("exceeded max retry count")
-			return
-		}
-
-		h.addToCount()
-
-		body, err := fetch(s)
-		if err != nil {
-			retryCount++
-			continue
-		}
-		retryCount = 0
-
-		var priceResp PriceResponse
-		if err := json.Unmarshal(body, &priceResp); err != nil {
-			log.Error().Msgf("error unmarshaling response: %v", err)
-			continue
-		}
-
-		totalMx.Lock()
-		totalReqCount++
-		totalMx.Unlock()
-
-		msgFormat := "%s price:%s"
-		cacheMx.Lock()
-		_, ok := cache[priceResp.Symbol]
-		if ok {
-			msgFormat += " changed"
-		}
-		cache[priceResp.Symbol] = priceResp.Price
-		cacheMx.Unlock()
-
-		log.Info().Msgf(msgFormat, priceResp.Symbol, priceResp.Price)
 	}
 }
 
