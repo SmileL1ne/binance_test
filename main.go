@@ -26,7 +26,7 @@ var (
 
 	// В иделе кэш должен быть реализоване в Redis
 	cache   map[string]string = make(map[string]string)
-	cacheMx sync.Mutex
+	cacheMx sync.Mutex        // в го принято ставить мьютекс выше тех полей, которые он защищает
 )
 
 type PriceResponse struct {
@@ -34,6 +34,7 @@ type PriceResponse struct {
 	Price  string `json:"price"`
 }
 
+// https://stackoverflow.com/questions/38842457/interface-naming-convention-golang
 type IHandler interface {
 	Run(ctx context.Context, symbols []string)
 	GetRequestsCount() int
@@ -46,7 +47,7 @@ type Handler struct {
 }
 
 func (h *Handler) Run(ctx context.Context, symbols []string) {
-	var retryCount int
+	var retryCount int // YAGNY
 	for _, s := range symbols {
 		select {
 		case <-ctx.Done():
@@ -60,9 +61,9 @@ func (h *Handler) Run(ctx context.Context, symbols []string) {
 			return
 		}
 
-		h.addToCount()
+		h.addToCount() // не понял зачем тебе сразу и addToCount() и totalReqCount++ понадобилось - дублируешь одну и ту же логику
 
-		body, err := fetch(s)
+		body, err := fetch(s) // если метод большой, то лучше назвать переменную s понятнее
 		if err != nil {
 			retryCount++
 			continue
@@ -70,25 +71,25 @@ func (h *Handler) Run(ctx context.Context, symbols []string) {
 		retryCount = 0
 
 		var priceResp PriceResponse
-		if err := json.Unmarshal(body, &priceResp); err != nil {
+		if err := json.Unmarshal(body, &priceResp); err != nil { // ты размазал логику получения цены - fetch и тут
 			log.Error().Msgf("error unmarshaling response: %v", err)
 			continue
 		}
 
 		totalMx.Lock()
-		totalReqCount++
+		totalReqCount++ // не учитываешь неудачные запросы
 		totalMx.Unlock()
 
 		msgFormat := "%s price:%s"
-		cacheMx.Lock()
+		cacheMx.Lock() // почему бы не воспользоваться одним мьютексом, вместо двух
 		_, ok := cache[priceResp.Symbol]
-		if ok {
+		if ok { // всегда будешь писать changed - даже когда цена не менялась
 			msgFormat += " changed"
 		}
 		cache[priceResp.Symbol] = priceResp.Price
 		cacheMx.Unlock()
 
-		log.Info().Msgf(msgFormat, priceResp.Symbol, priceResp.Price)
+		log.Info().Msgf(msgFormat, priceResp.Symbol, priceResp.Price) // в методе run нельзя писать цены - в задаче указано
 	}
 }
 
@@ -127,11 +128,11 @@ func main() {
 		}
 
 		wg.Add(1)
-		go func(s, e, num int, wg *sync.WaitGroup) {
+		go func(s, e, num int, wg *sync.WaitGroup) { // очень неудачные названия параметров
 			defer wg.Done()
-			h.Run(ctx, cfg.Symbols[s:e])
+			h.Run(ctx, cfg.Symbols[s:e]) // я бы разнес группировку символов и запуск воркеров - это было бы легче тестировать
 
-			log.Info().Msgf("handler %d made %d requests", num, h.GetRequestsCount())
+			log.Info().Msgf("handler %d made %d requests", num, h.GetRequestsCount()) // YAGNY - задание звучало не так
 		}(start, end, i, &wg)
 
 		start = end
